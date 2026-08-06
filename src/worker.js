@@ -36,7 +36,6 @@ async function hashKey(text) {
 
 async function webSearch(query, maxResults = 5, env) {
   if (!env.BRAVE_API_KEY) {
-    // Fallback to stub if no key configured
     return [
       {
         source: "web",
@@ -72,6 +71,7 @@ async function webSearch(query, maxResults = 5, env) {
     return [];
   }
 }
+
 // --- logic-based confidence scoring (no inference) ---
 
 function scoreConfidence(findings, loop, query) {
@@ -88,24 +88,12 @@ function scoreConfidence(findings, loop, query) {
     }
   }
 
-  // coverage: how many query terms appear in results
   const coverage = totalTerms > 0 ? termHits / totalTerms : 0;
-
-  // volume: more unique results = more confidence
   const volume = Math.min(findings.length / 5, 1.0);
-
-  // loop bonus: later loops with refined queries get slight boost
   const loopBonus = loop * 0.05;
-
-  // base + weighted components
   const score = Math.min(0.1 + coverage * 0.5 + volume * 0.25 + loopBonus, 1.0);
 
-  return {
-    score,
-    E: coverage,        // evidence coverage
-    M: volume,          // memory/volume
-    C: loopBonus,       // correction/loop
-  };
+  return { score, E: coverage, M: volume, C: loopBonus };
 }
 
 // --- query refinement via logic (no LLM) ---
@@ -154,6 +142,7 @@ function dedupeAndCap(findings, max = 15) {
   }
   return unique.slice(0, max);
 }
+
 // --- principles synthesis (no LLM, pure template logic) ---
 
 const PRINCIPLES = [
@@ -178,7 +167,6 @@ function synthesize(query, findings, hadMemory) {
     ? (hadMemory ? "cumulative_memory+web" : "principles+web")
     : "principles";
 
-  // logic-based cross-reference: find overlapping terms across findings
   const termFreq = {};
   for (const f of findings) {
     const words = `${f.title} ${f.snippet}`.toLowerCase().split(/\s+/);
@@ -250,13 +238,11 @@ async function resolveQuery(query, env) {
   const trail = [];
   const allFindings = [...historicalMemory];
   let bestConfidence = { score: 0, E: 0, M: 0, C: 0 };
-  let lastFindings = [];
 
   // 4. confidence loop — refine query, search, score, break when confident
   for (let loop = 0; loop < 3; loop++) {
     const searchQuery = refineQuery(query, loop);
     const findings = await webSearch(searchQuery, 5, env);
-    lastFindings = findings;
     allFindings.push(...findings);
 
     const confidence = scoreConfidence(findings, loop, query);
@@ -270,7 +256,6 @@ async function resolveQuery(query, env) {
       memoryBoost: historicalMemory.length > 0,
     });
 
-    // break early if confident enough — no need for more loops
     if (confidence.score >= 0.55) break;
   }
 
@@ -361,149 +346,4 @@ async function health(env) {
     brave: !!env.BRAVE_API_KEY,
     latencyMs: Date.now() - start,
   });
-}
-
-function scoreConfidence(findings, loop) {
-  // Simple confidence proxy for testing
-  const base = 0.2 + findings.length * 0.15 + (loop + 1) * 0.15;
-  return { score: Math.min(base, 1.0), E: 0.1, M: 0.1, C: 0 };
-}
-
-function summarizeTrail(trail) {
-  return trail.map((t) => ({
-    loop: t.loop,
-    web: t.webCount,
-    conf: t.confidence.score.toFixed(2),
-    sources: t.sources,
-    memory: t.memoryBoost ? "boosted" : "none",
-  }));
-}
-
-function checkEthics(query) {
-  const harmPatterns = [
-    /how to (make|build|create|synthesi[sz]e).*(bomb|weapon|poison|explosive|chemical.agent)/i,
-    /how to (harm|hurt|kill|injure|poison|maim).*(person|human|people|child|animal)/i,
-  ];
-  for (const p of harmPatterns) if (p.test(query)) return { blocked: true, reason: "Do no harm to humans." };
-  return { blocked: false };
-}
-
-// --- main resolve with KV-only cumulative memory ---
-
-async function resolveQuery(query, env) {
-  const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, "_").substring(0, 50);
-  const memKey = `mem:v4:${normalizedQuery}`;
-  const cacheKey = `v4:${await hashKey(query)}`;
-
-  // precise response cache
-  if (env.KV) {
-    const cached = await env.KV.get(cacheKey);
-    if (cached) {
-      const entry = JSON.parse(cached);
-      return { response: entry.response, trail: entry.trail, resolvedBy: "cache", cached: true };
-    }
-  }
-
-  const ethics = checkEthics(query);
-  if (ethics.blocked) {
-    const trailSummary = [{ loop: 0, web: 0, conf: "1.00", sources: [], memory: "none" }];
-    if (env.KV) await env.KV.put(cacheKey, JSON.stringify({ response: `BLOCKED: ${ethics.reason}`, trail: trailSummary, resolvedBy: "ethical" }), { expirationTtl: 3600 });
-    return { response: `BLOCKED: ${ethics.reason}`, trail: trailSummary, resolvedBy: "ethical", cached: false };
-  }
-
-  // load cumulative memory from KV
-  let historicalMemory = [];
-  if (env.KV) {
-    const raw = await env.KV.get(memKey);
-    if (raw) { try { historicalMemory = JSON.parse(raw) || []; } catch {} }
-  }
-
-  const trail = [];
-  const allFindings = [...historicalMemory];
-  let bestConfidence = { score: 0, E: 0.1, M: 0.1, C: 0 };
-
-  for (let loop = 0; loop < 3; loop++) {
-    const searchQuery = loop === 0 ? query : loop === 1 ? `${query} explained` : `${query} definition facts`;
-    const findings = await webSearch(searchQuery, 3);
-    allFindings.push(...findings);
-
-    const confidence = scoreConfidence(findings, loop);
-    if (confidence.score > bestConfidence.score) bestConfidence = confidence;
-
-    trail.push({
-      loop: loop + 1,
-      webCount: findings.length,
-      confidence,
-      sources: [...new Set(findings.map((f) => f.source))],
-      memoryBoost: historicalMemory.length > 0,
-    });
-
-    if (confidence.score >= 0.55 && allFindings.length >= 3) break;
-  }
-
-  // deduplicate by snippet, cap
-  const seen = new Set();
-  const unique = [];
-  for (const f of allFindings) {
-    const key = f.snippet || "";
-    if (key && !seen.has(key)) { seen.add(key); unique.push(f); }
-  }
-  const capped = unique.slice(0, 15);
-
-  // store cumulative memory back to KV (30d TTL)
-  if (env.KV && capped.length) {
-    await env.KV.put(memKey, JSON.stringify(capped), { expirationTtl: 2592000 });
-  }
-
-  // CRAC-style synthesis
-  const response = `Query: ${query}
-
-Findings:
-${capped.map((f, i) => `  ${i + 1}. [${f.source}] ${f.title || ""}: ${f.snippet.substring(0, 160)}`).join("\n")}
-
-Principles (light):
-${["Information precedes form.","Pattern mirrors elsewhere.","Nothing rests; observe change.","Opposites differ by degree.","Flows in cycles.","Nothing happens by chance.","Creation via duals.","Nothing lost, only transformed."].map((l, i) => `  ${i + 1}) ${l}`).join("\n")}
-
-Resolved by: ${capped.length > 0 ? (historicalMemory.length > 0 ? "cumulative_memory+web" : "principles+web") : "principles"}`;
-
-  if (env.KV) {
-    await env.KV.put(cacheKey, JSON.stringify({ response, trail, resolvedBy: capped.length > 0 ? (historicalMemory.length > 0 ? "cumulative_memory+web" : "principles+web") : "principles" }), { expirationTtl: 3600 });
-  }
-
-  return { response, trail, resolvedBy: capped.length > 0 ? (historicalMemory.length > 0 ? "cumulative_memory+web" : "principles+web") : "principles", cached: false };
-}
-
-async function resolveRequest(request, env) {
-  const body = await request.json().catch(() => ({}));
-  const query = body.prompt || "";
-  if (!query) return json({ error: "No prompt provided" }, 400);
-  const { response, trail, resolvedBy, cached } = await resolveQuery(query, env);
-  const trailSummary = summarizeTrail(trail);
-  if (cached) return json({ response, trail_summary: trailSummary, cached, resolved_by: resolvedBy });
-  const isStream = request.url.includes("?stream=1");
-  if (isStream) return streamSSE(response, trailSummary, cached, resolvedBy);
-  return json({ response, trail_summary: trailSummary, cached, resolved_by: resolvedBy });
-}
-
-function streamSSE(text, trailSummary, cached, resolvedBy) {
-  const encoder = new TextEncoder();
-  return new Response(new ReadableStream({
-    start(ctrl) {
-      const send = (data) => ctrl.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-      send({ trail_summary: trailSummary, cached, resolved_by: resolvedBy, done: false });
-      const words = text.split(/\s+/);
-      let i = 0;
-      const interval = setInterval(() => {
-        if (i >= words.length) { clearInterval(interval); send({ done: true }); ctrl.close(); return; }
-        const chunk = words.slice(i, i + 3).join(" ");
-        send({ token: chunk });
-        i += 3;
-      }, 30);
-    },
-  }), { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", ...corsHeaders } });
-}
-
-async function health(env) {
-  const start = Date.now();
-  return json({ status: "ok", kv: !!env.KV, latencyMs: Date.now() - start });
 }
