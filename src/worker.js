@@ -233,5 +233,3 @@ async function health(env) {
   const start = Date.now();
   return json({ status: "ok", kv: !!env.KV, brave: !!env.BRAVE_API_KEY, latencyMs: Date.now() - start });
 }
-
-That's the complete file — 218 lines. Copy it into `~/memkv/src/worker.js`, commit, and push.
