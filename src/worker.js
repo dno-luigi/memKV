@@ -205,7 +205,7 @@ function synthesize(query, findings, hadMemory, trail) {
   const principlesApplied = applyPrinciples(findings, hadMemory, trail, termFreq);
   const principlesBlock = principlesApplied
     .map((p) => `  ${p.principle}\n    → ${p.applied}`).join("\n\n");
-  return `Query: ${query}\n\nSummary:\n  ${keySentence.text} [${keySentence.source}]\n\nCitations:\n${citations}\n\nCross-references:\n${crossRefs.length > 0 ? crossRefs.join("\n") : "  (none)"}\n\nPrinciples applied:\n${principlesBlock}\n\nResolved by: ${resolvedBy}`;
+  return `Query: ${query}\n\nSummary:\n  ${keySentence.text} [${keySentence.source}]\n\nCitations: ${citations}\n\nCross-references:\n${crossRefs.length > 0 ? crossRefs.join("\n") : "  (none)"}\n\nPrinciples applied:\n${principlesBlock}\n\nResolved by: ${resolvedBy}`;
 }
 async function resolveQuery(query, env) {
   const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, "_").substring(0, 50);
