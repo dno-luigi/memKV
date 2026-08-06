@@ -282,7 +282,7 @@ async function resolveRequest(request, env) {
   if (isStream) return streamSSE(response, trailSummary, cached, resolvedBy);
   return json({ response, trail_summary: trailSummary, cached, resolved_by: resolvedBy });
 }
-
+  
 function streamSSE(text, trailSummary, cached, resolvedBy) {
   const encoder = new TextEncoder();
   return new Response(new ReadableStream({
