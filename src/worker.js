@@ -99,8 +99,9 @@ function summarizeTrail(trail) {
 
 function checkEthics(query) {
   const harmPatterns = [
-    /how to (make|build|create|synthesi[sz]e).*(bomb|weapon|poison|explosive|chemical.agent)/i,
-    /how to (harm|hurt|kill|injure|poison|maim).*(person|human|people|child|animal)/i,
+    /how to (harm|hurt|kill|injure|poison|maim|murder|attack).*(person|human|people|child|animal|someone|somebody)/i,
+    /how to (make|build|create|synthesi[sz]e).*(poison|chemical.agent).*(for|to|against).*(person|human|people|child|someone)/i,
+    /how to (poison|kill|murder).*(someone|anyone|a person|people)/i,
   ];
   for (const p of harmPatterns) if (p.test(query)) return { blocked: true, reason: "Do no harm to humans." };
   return { blocked: false };
@@ -117,7 +118,7 @@ function dedupeAndCap(findings, max = 15) {
 
 function extractKeySentence(findings, query) {
   const queryTerms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
-  let best = null, bestScore = -1;
+  let best = null, bestScore = -1, bestSource = "";
   for (const f of findings) {
     if (!f.snippet) continue;
     const sentences = f.snippet.split(/(?<=[.!?])\s+/);
@@ -127,10 +128,10 @@ function extractKeySentence(findings, query) {
       let termHits = queryTerms.filter((t) => sLower.includes(t)).length;
       let lengthBonus = Math.min(s.length / 200, 1.0);
       let score = termHits * 2 + lengthBonus;
-      if (score > bestScore) { bestScore = score; best = s.trim(); }
+      if (score > bestScore) { bestScore = score; best = s.trim(); bestSource = f.source; }
     }
   }
-  return best || findings[0]?.snippet || "";
+  return { text: best || findings[0]?.snippet || "", source: bestSource };
 }
 
 const PRINCIPLES = [
@@ -189,7 +190,7 @@ function applyPrinciples(findings, hadMemory, trail, termFreq) {
 
 function synthesize(query, findings, hadMemory, trail) {
   const resolvedBy = findings.length > 0 ? (hadMemory ? "cumulative_memory+web" : "principles+web") : "principles";
-  const keySentence = findings.length > 0 ? extractKeySentence(findings, query) : "No findings available.";
+  const keySentence = findings.length > 0 ? extractKeySentence(findings, query) : { text: "No findings available.", source: "" };
   const termFreq = {};
   for (const f of findings) {
     const words = `${f.title} ${f.snippet}`.toLowerCase().split(/\s+/);
@@ -204,8 +205,7 @@ function synthesize(query, findings, hadMemory, trail) {
   const principlesApplied = applyPrinciples(findings, hadMemory, trail, termFreq);
   const principlesBlock = principlesApplied
     .map((p) => `  ${p.principle}\n    → ${p.applied}`).join("\n\n");
-  return `Query: ${query}\n\nSummary:\n  ${keySentence}\n\nCitations:\n${citations}\n\nCross-references:\n${crossRefs.length > 0 ? crossRefs.join("\n") : "  (none)"}\n\nPrinciples applied:\n${principlesBlock}\n\nResolved by: ${resolvedBy}`;
-}
+  return `Query: ${query}\n\nSummary:\n  ${keySentence.text} [${keySentence.source}]\n\nCitations:\n${citations}\n\nCross-references:\n${crossRefs.length > 0 ? crossRefs.join("\n") : "  (none)"}\n\nPrinciples applied:\n${principlesBlock}\n\nResolved by: ${resolvedBy}`;
 
 async function resolveQuery(query, env) {
   const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, "_").substring(0, 50);
