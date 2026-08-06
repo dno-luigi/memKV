@@ -1,7 +1,0 @@
-name = "memKV"
-main = "worker.js"
-compatibility_date = "2026-01-01"
-
-[[kv_namespaces]]
-binding = "KV"
-id = "bb7c192d55b04885a3357879d97e1595"

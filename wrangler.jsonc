@@ -1,0 +1,17 @@
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "memkv",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-04",
+  "observability": {
+    "enabled": true
+  },
+
+  // Add this to your wrangler.jsonc
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "bb7c192d55b04885a3357879d97e1595",
+      
+       }
+  ]
+}
