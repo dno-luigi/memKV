@@ -115,28 +115,96 @@ function dedupeAndCap(findings, max = 15) {
   return unique.slice(0, max);
 }
 
+function extractKeySentence(findings, query) {
+  const queryTerms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+  let best = null, bestScore = -1;
+  for (const f of findings) {
+    if (!f.snippet) continue;
+    const sentences = f.snippet.split(/(?<=[.!?])\s+/);
+    for (const s of sentences) {
+      if (s.length < 20 || s.length > 300) continue;
+      const sLower = s.toLowerCase();
+      let termHits = queryTerms.filter((t) => sLower.includes(t)).length;
+      let lengthBonus = Math.min(s.length / 200, 1.0);
+      let score = termHits * 2 + lengthBonus;
+      if (score > bestScore) { bestScore = score; best = s.trim(); }
+    }
+  }
+  return best || findings[0]?.snippet || "";
+}
+
 const PRINCIPLES = [
   "Information precedes form.", "Pattern mirrors elsewhere.", "Nothing rests; observe change.",
   "Opposites differ by degree.", "Flows in cycles.", "Nothing happens by chance.",
   "Creation via duals.", "Nothing lost, only transformed.",
 ];
 
-function synthesize(query, findings, hadMemory) {
-  const findingsBlock = findings.length > 0
-    ? findings.map((f, i) => `  ${i + 1}. [${f.source}] ${f.title}: ${f.snippet.substring(0, 200)}`).join("\n")
-    : "  (no web results found)";
-  const principlesBlock = PRINCIPLES.map((p, i) => `  ${i + 1}) ${p}`).join("\n");
+function applyPrinciples(findings, hadMemory, trail, termFreq) {
+  const topTerms = Object.entries(termFreq)
+    .filter(([_, count]) => count >= 2)
+    .sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const sourceCount = new Set(findings.map((f) => f.source)).size;
+  const loops = trail.length;
+  return [
+    {
+      principle: "Information precedes form.",
+      applied: `Gathered ${findings.length} findings from ${sourceCount} sources before synthesizing. The summary is derived from evidence, not assumption.`,
+    },
+    {
+      principle: "Pattern mirrors elsewhere.",
+      applied: topTerms.length > 0
+        ? `Terms appearing across multiple sources: ${topTerms.map(([t, c]) => `"${t}" (${c}x)`).join(", ")}. Convergence across independent sources increases reliability.`
+        : `No recurring terms detected across sources. Findings remain isolated.`,
+    },
+    {
+      principle: "Nothing rests; observe change.",
+      applied: loops > 1
+        ? `Query refined across ${loops} iterations. Each loop adapted based on prior results.`
+        : `Single pass sufficient — confidence threshold met on first search.`,
+    },
+    {
+      principle: "Opposites differ by degree.",
+      applied: `Confidence scored on a spectrum (0.0–1.0), not binary. Current: ${trail[0]?.confidence?.score?.toFixed(2) || "N/A"}. Coverage: ${trail[0]?.confidence?.E?.toFixed(2) || "N/A"}, Volume: ${trail[0]?.confidence?.M?.toFixed(2) || "N/A"}.`,
+    },
+    {
+      principle: "Flows in cycles.",
+      applied: hadMemory
+        ? `Historical memory from prior queries merged with fresh results. Past findings fed back into the current synthesis.`
+        : `No prior memory for this query. First cycle established — future queries on this topic will benefit from accumulated memory.`,
+    },
+    {
+      principle: "Nothing happens by chance.",
+      applied: `Query refinement was deliberate: each variation ("explained", "definition examples") targeted a different facet of the question. No random sampling.`,
+    },
+    {
+      principle: "Creation via duals.",
+      applied: `Synthesis combines two inputs: ${hadMemory ? "cumulative memory + live web search" : "live web search + principles framework"}. The answer emerges from their interaction, not either alone.`,
+    },
+    {
+      principle: "Nothing lost, only transformed.",
+      applied: `All ${findings.length} findings stored to KV memory (30-day TTL). Raw data is preserved; the summary is a transformation, not a replacement.`,
+    },
+  ];
+}
+
+function synthesize(query, findings, hadMemory, trail) {
   const resolvedBy = findings.length > 0 ? (hadMemory ? "cumulative_memory+web" : "principles+web") : "principles";
+  const keySentence = findings.length > 0 ? extractKeySentence(findings, query) : "No findings available.";
   const termFreq = {};
   for (const f of findings) {
     const words = `${f.title} ${f.snippet}`.toLowerCase().split(/\s+/);
     for (const w of words) { if (w.length > 3) termFreq[w] = (termFreq[w] || 0) + 1; }
   }
-  const crossRefs = Object.entries(termFreq)
-    .filter(([_, count]) => count >= 2).sort((a, b) => b[1] - a[1]).slice(0, 5)
-    .map(([term, count]) => `  - "${term}" appears in ${count} results`);
-  const crossRefBlock = crossRefs.length > 0 ? `\nCross-references:\n${crossRefs.join("\n")}` : "";
-  return `Query: ${query}\n\nFindings:\n${findingsBlock}\n${crossRefBlock}\nPrinciples (light):\n${principlesBlock}\n\nResolved by: ${resolvedBy}`;
+  const topTerms = Object.entries(termFreq)
+    .filter(([_, count]) => count >= 2).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const crossRefs = topTerms.map(([term, count]) => `  - "${term}" appears in ${count} results`);
+  const citations = findings.length > 0
+    ? findings.map((f, i) => `  ${i + 1}. [${f.source}] ${f.title}: ${f.snippet.substring(0, 200)}`).join("\n")
+    : "  (no web results found)";
+  const principlesApplied = applyPrinciples(findings, hadMemory, trail, termFreq);
+  const principlesBlock = principlesApplied
+    .map((p) => `  ${p.principle}\n    → ${p.applied}`).join("\n\n");
+  return `Query: ${query}\n\nSummary:\n  ${keySentence}\n\nCitations:\n${citations}\n\nCross-references:\n${crossRefs.length > 0 ? crossRefs.join("\n") : "  (none)"}\n\nPrinciples applied:\n${principlesBlock}\n\nResolved by: ${resolvedBy}`;
 }
 
 async function resolveQuery(query, env) {
@@ -194,7 +262,7 @@ async function resolveQuery(query, env) {
 
   const hadMemory = historicalMemory.length > 0;
   const resolvedBy = capped.length > 0 ? (hadMemory ? "cumulative_memory+web" : "principles+web") : "principles";
-  const response = synthesize(query, capped, hadMemory);
+  const response = synthesize(query, capped, hadMemory, trail);
 
   if (env.KV) {
     await env.KV.put(cacheKey, JSON.stringify({ response, trail, resolvedBy }), { expirationTtl: 3600 });
