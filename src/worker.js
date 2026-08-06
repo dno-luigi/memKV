@@ -1,4 +1,3 @@
-
 // worker.js — LLM-free resolve engine
 // Web search (Brave) → parse → confidence loops → KV memory → principles synthesis
 
