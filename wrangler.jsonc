@@ -1,3 +1,4 @@
+{
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "memkv",
   "main": "src/worker.js",
@@ -10,7 +11,7 @@
   "kv_namespaces": [
     {
       "binding": "KV",
-      "id": "bb7c192d55b04885a3357879d97e1595",
+      "id": "bb7c192d55b04885a3357879d97e1595"
       
        }
   ]
